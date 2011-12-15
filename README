@@ -8,6 +8,13 @@ These functions are not intended to have exact parameter parity with the
 MEDRMS iraf package. Rather, they are intended to provide similar
 functionality with a Pythonic interface
 
+INSTALLATION:
+Standard:
+python setup.py install
+
+Using a non-standard library location (e.g. Dropbox):
+python setup.py install --prefix=~/Dropbox/Python
+
 Example usage:
 import pyfits
 import astroRMS
