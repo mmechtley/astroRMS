@@ -1,0 +1,22 @@
+Matt Mechtley - Dec 2011 - https://github.com/mmechtley
+Python implementation of Mark Dickinson's iraf tasks for calculating
+pixel-to-pixel RMS noise in astronomical images, taking into account
+autocorrelation, noise variations in the weight map, and masking out
+the objects themselves.
+
+These functions are not intended to have exact parameter parity with the
+MEDRMS iraf package. Rather, they are intended to provide similar
+functionality with a Pythonic interface
+
+Example usage:
+import pyfits
+import astroRMS
+from numpy import sqrt
+
+sciData = pyfits.getdata('myimage_drz_sci.fits')
+weightData = pyfits.getdata('myimage_drz_weight.fits')
+calcSection = (slice(400,600), slice(200,400))
+rmsInfo = astroRMS.calc_RMS(sciData[calcSection], weightData[calcSection])
+
+rmsData = 1/sqrt(rmsInfo['weightScale'] * weightData)
+pyfits.writeto('myimage_drz_rms.fits', rmsData)
