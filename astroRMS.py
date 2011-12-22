@@ -26,8 +26,10 @@ pyfits.writeto('myimage_drz_rms.fits', rmsData)
 import pyfits
 import numpy as np
 from numpy.fft import fftn, ifftn, fftshift
-from scipy.ndimage import median_filter, uniform_filter, binary_dilation, binary_erosion
+from scipy.ndimage import median_filter, uniform_filter, binary_dilation, binary_erosion, minimum_filter, maximum_filter
 import datetime
+
+## TODO: Use minimum/maximum_filter in place of binary_dilation/erosion
 
 _log_info = {
 	'autocorrRMS': 'RMS calculated from autocorrelation function',
@@ -88,10 +90,10 @@ def object_mask(input_data, sky_size=15, smooth_size=3, thresh_type='sigma',
 		workingData -= median_filter(workingData, size=sky_size)
 
 	## Calculate image statistics to determine median sky level and RMS noise
-	mask = np.ones(workingData.shape, dtype=bool)
+	statsMask = np.ones(workingData.shape, dtype=bool)
 	for step in xrange(num_clips):
-		sky, rms = (np.median(workingData[mask]), np.std(workingData[mask]))
-		mask = (workingData < sky + 5*rms) & (workingData > sky - 5*rms)
+		sky, rms = (np.median(workingData[statsMask]), np.std(workingData[statsMask]))
+		statsMask = (workingData < sky + 5*rms) & (workingData > sky - 5*rms)
 
 	## Median filter before thresholding, if commanded
 	if smooth_size > 0:
@@ -130,7 +132,8 @@ def autocorrelation_phot(autocorr_image, aper_radius=5, bg_annulus_radii=(5,7)):
 		Radius of the aperture to use for finding total flux of the
 		autocorrelation peak
 	bg_annulus_radii : float 2-tuple
-		Inner and outer radius of sky annulus
+		Inner and outer radius of sky annulus. NOT inner radius and annulus
+		width as in IRAF.
 
 	Returns
 	-------
@@ -300,10 +303,10 @@ def calc_RMS(image_data, weight_data=None, sky_size=101,
 		## Find median of the masked, rms-filtered image, using iterative clipping
 		for step in xrange(10):
 			dilatedMask |= (rmsFiltered <= 0.0)   ## Reject pixels < 0. Do these exist?
-			medRMS, rmsRMS = (np.median(rmsFiltered[dilatedMask]),
-			                  np.std(rmsFiltered[dilatedMask]))
-			dilatedMask = ((rmsFiltered < medRMS + 5*rmsRMS) &
-			               (rmsFiltered > medRMS - 5*rmsRMS))
+			medRMS, rmsRMS = (np.median(rmsFiltered[~dilatedMask]),
+			                  np.std(rmsFiltered[~dilatedMask]))
+			dilatedMask |= ((rmsFiltered > medRMS + 5*rmsRMS) |
+			               (rmsFiltered < medRMS - 5*rmsRMS))
 		measuredRMS = medRMS
 
 	## Compute weight map scaling
