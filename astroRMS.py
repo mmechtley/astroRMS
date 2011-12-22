@@ -23,13 +23,15 @@ rmsData = 1/sqrt(rmsInfo['weightScale'] * weightData)
 pyfits.writeto('myimage_drz_rms.fits', rmsData)
 """
 
+## separate float division: / and floor division: //, See PEP 238
+from __future__ import division
 import pyfits
 import numpy as np
 from numpy.fft import fftn, ifftn, fftshift
 from scipy.ndimage import median_filter, uniform_filter, binary_dilation, binary_erosion, minimum_filter, maximum_filter
 import datetime
 
-## TODO: Use minimum/maximum_filter in place of binary_dilation/erosion
+## TODO: Use minimum/maximum_filter in place of binary_dilation/erosion? Time these.
 
 _log_info = {
 	'autocorrRMS': 'RMS calculated from autocorrelation function',
@@ -41,8 +43,9 @@ _log_info = {
 	'fracFlagged': 'Fraction of pixels masked out of the input image when calculating RMS (Object pixels, zero-weight pixels, etc.)'
 }
 
-def object_mask(input_data, sky_size=15, smooth_size=3, thresh_type='sigma',
-             threshold=1.5, num_clips=10, grow_size=0, out_file=None):
+def object_mask(input_data, sky_bin=4, sky_size=15, smooth_size=3,
+                thresh_type='sigma', threshold=1.5, num_clips=10, grow_size=0,
+                out_file=None):
 	"""
 	Creates a numpy array representing a mask of the object pixels in an input
 	astronomical image. Uses sigma-based feature thresholding. Objects will be
@@ -52,9 +55,12 @@ def object_mask(input_data, sky_size=15, smooth_size=3, thresh_type='sigma',
 	----------
 	input_data : numpy 2-D array
 		Input image data
+	sky_bin : integer
+		Binning factor to use before median-filtering to subtract the sky
 	sky_size : integer
-		Median filter size for local sky evaluation. If 0, image must already
-		be sky-subtracted
+		Size of median filter kernel for subtracting local sky. Effective
+		kernel size will be sky_size*sky_bin. If 0, image must already be
+		sky-subtracted.
 	smooth_size : integer
 		Boxcar filter size for smoothing before thresholding
 	thresh_type : string
@@ -72,7 +78,6 @@ def object_mask(input_data, sky_size=15, smooth_size=3, thresh_type='sigma',
 		numpy array with objects labeled with value '1', sky with '0'
 	"""
 	## TODO: Accept input bad pixel mask?
-	## TODO: Make it so you can rebin?
 
 	## Raise error if boxcar smoothing parameters are not odd numbers
 	if (sky_size > 0 and sky_size % 2 != 1) or (smooth_size > 0 and smooth_size % 2 != 1):
@@ -87,7 +92,7 @@ def object_mask(input_data, sky_size=15, smooth_size=3, thresh_type='sigma',
 
 	## If sky_size is supplied, create a median image of the local sky value, and subtract that off
 	if sky_size > 0:
-		workingData -= median_filter(workingData, size=sky_size)
+		workingData -= binned_median_filter(workingData, sky_bin, sky_size)
 
 	## Calculate image statistics to determine median sky level and RMS noise
 	statsMask = np.ones(workingData.shape, dtype=bool)
@@ -95,14 +100,14 @@ def object_mask(input_data, sky_size=15, smooth_size=3, thresh_type='sigma',
 		sky, rms = (np.median(workingData[statsMask]), np.std(workingData[statsMask]))
 		statsMask = (workingData < sky + 5*rms) & (workingData > sky - 5*rms)
 
-	## Median filter before thresholding, if commanded
+	## Uniform filter before thresholding, if commanded
 	if smooth_size > 0:
 		workingData = uniform_filter(workingData, size=smooth_size)
 
 	## Do the thresholding
 	if thresh_type == 'sigma':
 		threshold *= rms
-	workingData = np.where(workingData < sky + threshold, 0, 1)
+	workingData = np.where(workingData < sky + threshold, 0, 1).astype(np.uint8)
 
 	## Dilate or Erode objects if commanded
 	growKern = np.ones((2*grow_size + 1, 2*grow_size + 1))
@@ -140,9 +145,11 @@ def autocorrelation_phot(autocorr_image, aper_radius=5, bg_annulus_radii=(5,7)):
 	(rms, corrFactor) : float 2-tuple
 		pixelwise RMS and autocorrelation factor
 	"""
+	## TODO: Improve memory efficiency and numerical accuracy
+
 	## Get image shape and center coordinates
 	imShape = autocorr_image.shape
-	center = tuple(dimSize/2. - 0.5 for dimSize in imShape)
+	center = tuple(dimSize/2 - 0.5 for dimSize in imShape)
 
 	## generate x,y coordinates of pixels, and square distance to center of each
 	x,y = np.meshgrid(range(imShape[1]), range(imShape[0]))
@@ -150,15 +157,25 @@ def autocorrelation_phot(autocorr_image, aper_radius=5, bg_annulus_radii=(5,7)):
 
 	## 'sky' or background mask is an annulus around the center
 	skyMask = (sqDist > bg_annulus_radii[0]**2) & (sqDist < bg_annulus_radii[1]**2)
+	skyFixMask = ((sqDist > (bg_annulus_radii[0]-1)**2) &
+	              (sqDist < (bg_annulus_radii[1]+1)**2)) & ~skyMask
+	skyFixArea = (np.pi*(bg_annulus_radii[1]**2 - bg_annulus_radii[0]**2)
+	              - autocorr_image[skyMask].size)
+	skyWts = (np.where(skyMask, 1, 0)
+	          + np.where(skyFixMask, skyFixArea/autocorr_image[skyFixMask].size, 0))
 	## 'Flux' or measurement mask is a circle around the center
 	fluxMask = (sqDist < aper_radius**2)
+	fluxFixMask = (sqDist < (aper_radius+1)**2) & ~fluxMask
+	fluxFixArea  = np.pi*aper_radius**2 - autocorr_image[fluxMask].size
+	fluxWts = (np.where(fluxMask, 1, 0)
+	           + np.where(fluxFixMask, fluxFixArea/autocorr_image[fluxFixMask].size, 0))
 
 	## Calculate RMS and autocorrelation factor based on peak, background, and
 	## integrated magnitude of the autocorrelation peak
 	peakVal = np.max(autocorr_image[fluxMask])
-	bgVal = np.mean(autocorr_image[skyMask])
-	totalCorr = np.sum(autocorr_image[fluxMask] - bgVal)
-	calcRMS = np.sqrt((peakVal - bgVal) / float(autocorr_image.size))
+	bgVal = np.average(autocorr_image, weights=skyWts)
+	totalCorr = np.sum((autocorr_image - bgVal)*fluxWts)
+	calcRMS = np.sqrt((peakVal - bgVal) / autocorr_image.size)
 	corrFac = np.sqrt(totalCorr / (peakVal - bgVal))
 
 	return calcRMS, corrFac
@@ -188,27 +205,62 @@ def autocorrelation(image_data, real_only=True):
 def rms_filter(image_data, filt_size=7):
 	"""
 	Runs an 'RMS filter' on image data. Really this is the square root of the
-	(appropriately scaled) difference of the squared median-filtered image and
-	the median-filtered squared image. i.e. f*sqrt(med(i**2) - med(i)**2)
+	(appropriately scaled) difference of the squared uniform-filtered image and
+	the uniform-filtered squared image. i.e. f*sqrt(boxcar(i**2) - boxcar(i)**2)
 
 	Parameters
 	----------
 	image_data : numpy 2-D array
 		Image data to be filtered
 	filt_size : integer
-		Size of median filter kernel to use
+		Size of uniform filter kernel to use
 
 	Returns
 	-------
 	filtered : numpy 2-D array
 		RMS-filtered version of input image
 	"""
-	medianSqr = median_filter(image_data**2, size=filt_size)
-	sqrMedian = median_filter(image_data, size=filt_size)**2
+	medianSqr = uniform_filter(image_data**2, size=filt_size)
+	sqrMedian = uniform_filter(image_data, size=filt_size)**2
 	sqrDiffScale = filt_size**2 / (filt_size**2 - 1)
 	return np.sqrt(np.abs(sqrDiffScale * (sqrMedian - medianSqr)))
 
-def calc_RMS(image_data, weight_data=None, sky_size=101,
+def binned_median_filter(image_data, bin_size=4, filt_size=25):
+	"""
+	Implements a median filter that block-averages the image data before
+	applying the filter.
+
+	Parameters
+	----------
+	image_data : numpy 2-D array
+		2-dimensional numpy array containing image data
+	bin_size : integer
+		Binning factor to use before median-filtering. image_data.shape must
+		be an integer multiple of bin_size in both directions.
+	filt_size : integer
+		Size of median filter kernel. Effective kernel size in the returned
+		image will be filt_size*bin_size
+
+	Returns
+	-------
+	image_data_filtered : numpy 2-D array
+		median-filtered version of input image
+	"""
+	imgShape = image_data.shape
+	if (imgShape[0] % bin_size != 0 or imgShape[1] % bin_size != 0):
+		raise ValueError('Size of image_data must be a multiple of bin_size '+
+		                 'in both dimensions')
+	if bin_size > 1:
+		binned  = np.add.reduceat(
+			np.add.reduceat(image_data, np.arange(0, imgShape[0], bin_size), axis=0),
+			np.arange(0, imgShape[1], bin_size), axis=1) / bin_size**2
+	else:
+		binned = image_data
+
+	binned = median_filter(binned, size=filt_size, mode='nearest')
+	return np.repeat(np.repeat(binned, bin_size, axis=0), bin_size, axis=1)
+
+def calc_RMS(image_data, weight_data=None, sky_bin=4, sky_size=25,
             autocorr_aper=5, autocorr_bg_annulus_radii=(5,7),
             mask_smooth_size=3, mask_sigma=1.5, mask_grow_size=3,
             use_rms_filt=False, rms_filt_size=7, log_file=None):
@@ -224,8 +276,11 @@ def calc_RMS(image_data, weight_data=None, sky_size=101,
 	weight_data : numpy 2-D array
 		2-dimensional numpy array with weight map for image data. (e.g.
 		weight map output from Multidrizzle)
+	sky_bin : integer
+		Binning factor to use before median-filtering to subtract the sky
 	sky_size : integer
-		Size of median filter kernel for subtracting local sky
+		Size of median filter kernel for subtracting local sky. Effective
+		kernel size will be sky_size*sky_bin
 	autocorr_aper : float
 		Aperture used in performing photometry on autocorrelation function
 	autocorr_bg_annulus_radii : float 2-tuple
@@ -260,26 +315,25 @@ def calc_RMS(image_data, weight_data=None, sky_size=101,
 	weightScale   : Factor to scale supplied weight map by to create
 		inverse variance map
 	"""
-	## TODO: Make it so you can rebin when doing median on sky?
 	workingData = image_data.copy()
 	bpMask = np.zeros(workingData.shape, dtype=bool)
 
 	## Use weight map to normalize noise -- drz_sci*sqrt(norm(drz_weight))
 	if weight_data is not None:
 		weightAvg = np.mean(weight_data)
-		workingData *= np.sqrt(weight_data/weightAvg)
+		workingData *= np.sqrt(weight_data / weightAvg)
 		## Mask out pixels with zero weight
 		bpMask |= (weight_data == 0)
 
 	# Subtract the sky. Avoids doing it twice -- once for object masking & once here
-	workingData -= median_filter(workingData, size=sky_size)
+	workingData -= binned_median_filter(workingData, sky_bin, sky_size)
 
 	## Mask out objects using sigma thresholding
 	if mask_sigma > 0:
 		bpMask |= object_mask(workingData, sky_size=0, smooth_size=mask_smooth_size,
 		                   threshold=mask_sigma, grow_size=mask_grow_size).astype(bool)
 
-	fracFlagged = image_data[bpMask].size/float(image_data.size)
+	fracFlagged = image_data[bpMask].size / image_data.size
 
 	## Zero out non-sky pixels (including objects, zero-weight pixels)
 	workingData[bpMask] = 0.0
@@ -312,7 +366,7 @@ def calc_RMS(image_data, weight_data=None, sky_size=101,
 	## Compute weight map scaling
 	weightNominal = 1.0 / (measuredRMS * corrFactor)**2
 	if weight_data is not None:
-		weightScale = weightNominal/weightAvg
+		weightScale = weightNominal / weightAvg
 
 	## Construct output dictionary
 	rms_info = dict({'fracFlagged': fracFlagged, 'autocorrRMS': autocorrRMS,
