@@ -69,13 +69,15 @@ def _pixel_stats(pixels, clip_sig=3, n_clip=10, min_pix=50):
 def _measure_autocorrelation(image_data, aper_radius=5,
                              bg_annulus_radii=(5, 7)):
     """
-    Uses the autocorrelation peak to calculate pixelwise RMS and correlation
-    factor. This is an aperture photometry-like algorithm.
+    Uses the autocorrelation function to calculate pixelwise RMS and correlation
+    correction factor. This is an aperture photometry-like algorithm that
+    measures the integrated autocorrelation function centered at zero lag.
 
-    :param image_data: Image to compute autocorrelation of. Should be sky-
+    :param image_data: Image data to compute autocorrelation of. Should be sky-
         subtracted and have objects and bad pixels set to 0.
-    :param aper_radius: Radius of the aperture to use for finding total flux of
-        the autocorrelation peak
+    :param aper_radius: Radius of the aperture to use for finding total power of
+        the autocorrelation peak. The default is a 5-pixel lag in each
+        direction, sufficient for most dither/drizzle schemes.
     :param bg_annulus_radii: Inner and outer radius of sky annulus. NOT inner
         radius and annulus width as in IRAF.
     :return: 2-tuple of RMS and autocorrelation factor
@@ -331,7 +333,7 @@ def calc_rms(image_data, weight_data=None, sky_bin=4, sky_size=25,
                                         n_clip=10)
         measured_rms = med_rms
 
-    # Compute weight map scaling
+    # Compute nominal weight (sky inverse variance, corrected for correlation)
     weight_nominal = 1.0 / (measured_rms * corr_factor) ** 2
 
     # Construct output dictionary
@@ -451,7 +453,7 @@ def create_error_map(sci_file, weight_file, out_file, map_type='ivm',
                                        **select_region_kwargs)
 
     weight_to_ivm_scale = 0.0
-    # Calculate weightmap to rmsmap scaling for each slice, average
+    # Calculate weightmap to IVM scaling for each slice, average
     print('Autocorrelating regions for {}:'.format(sci_file))
     for slice_y, slice_x in calc_slices:
         autocorr_dict = calc_rms(sci_data[slice_y, slice_x],
@@ -460,7 +462,7 @@ def create_error_map(sci_file, weight_file, out_file, map_type='ivm',
         weight_to_ivm_scale += autocorr_dict['weight_scale'] / len(calc_slices)
         slice_str = '[{:d}:{:d},{:d}:{:d}]'.format(slice_x.start, slice_x.stop,
                                                    slice_y.start, slice_y.stop)
-        print('RMS scale from region {}: {:.5f}'.format(
+        print('Weight scale from region {}: {:.5f}'.format(
             slice_str, autocorr_dict['weight_scale']))
 
     # Bad pixels are those with 0 or negative weight.
@@ -473,8 +475,10 @@ def create_error_map(sci_file, weight_file, out_file, map_type='ivm',
         weight_data[bpmask] = bad_px_value
 
     # Save file
-    fits.writeto(out_file, header=weight_image[0].header,
-                 data=weight_data, clobber=True)
+    out_header = weight_image[0].header.copy()
+    out_header['WHTSCALE'] = (weight_to_ivm_scale,
+                              'Weight map to IVM scaling factor')
+    fits.writeto(out_file, header=out_header, data=weight_data, clobber=True)
     weight_image.close()
 
     if return_stats:
