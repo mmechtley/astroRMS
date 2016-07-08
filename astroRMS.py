@@ -298,7 +298,8 @@ def calc_rms(image_data, weight_data=None, sky_bin=4, sky_size=25,
         working_data *= np.sqrt(weight_data / weight_avg)
 
     # Subtract the sky. Avoids doing it twice, once for object masking and
-    # once here
+    # once here. Set bad pixels to 0.
+    working_data[bp_mask] = 0.0
     working_data -= _binned_median_filter(working_data, sky_bin, sky_size)
     working_data[bp_mask] = 0.0
 
