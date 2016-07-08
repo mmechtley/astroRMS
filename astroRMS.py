@@ -19,9 +19,9 @@ astroRMS.create_error_map(sci_file, wht_file, out_file)
 """
 # separate float division: / and floor division: //, See PEP 238
 from __future__ import division
-import datetime
 import numpy as np
 import scipy.ndimage as ndimg
+from datetime import datetime
 from warnings import warn
 from inspect import getargspec
 from numpy.fft import fftn, ifftn, ifftshift
@@ -104,8 +104,8 @@ def _measure_autocorrelation(image_data, aper_radius=5,
     sky_fix_mask &= sq_dist < (max(bg_annulus_radii) + 1) ** 2
 
     # How much area is not accounted for in the original mask?
-    sky_fix_area = (np.pi * (max(bg_annulus_radii) ** 2
-                             - min(bg_annulus_radii) ** 2) - np.sum(sky_mask))
+    sky_fix_area = (np.pi * (max(bg_annulus_radii) ** 2 -
+                             min(bg_annulus_radii) ** 2) - np.sum(sky_mask))
     # What fraction of the 1-pixel expanded ring is actually inside the annulus
     fix_pixels_weight = sky_fix_area / np.sum(sky_fix_mask)
     sky_wts = 1.0 * sky_mask + fix_pixels_weight * sky_fix_mask
@@ -194,6 +194,7 @@ def object_mask(input_data, sky_bin=4, sky_size=15, smooth_size=3,
     :param num_clips: Number of times to apply sigma clip when calculating sky
         statistics
     :param grow_radius: Radius of rings to grow around masked objects
+    :param out_file: Optional file to save mask to
 
     :return: numpy array with objects labeled with value '1', sky with '0'
     """
@@ -353,7 +354,7 @@ def calc_rms(image_data, weight_data=None, sky_bin=4, sky_size=25,
         with open(log_file, 'a') as log:
             log.write('Python calc_rms run ended at {}\n'.format(
                 str(datetime.now())))
-            for key, value in rms_info.iteritems():
+            for key, value in rms_info.items():
                 log.write('{:0.5f}\t{}\n'.format(value, _log_info[key]))
     return rms_info
 
@@ -387,7 +388,7 @@ def select_region_slices(sci_data, badpix_mask, box_size=256, num_boxes=10):
     img_boxcar = np.ma.array(img_boxcar, mask=badpix_mask)
 
     box_slices = []
-    for box in xrange(num_boxes):
+    for box in range(num_boxes):
         # Find the location of the minimum value of the boxcar image, excluding
         # masked areas. This will be a pixel with few nearby sources within one
         # box width
@@ -435,9 +436,9 @@ def create_error_map(sci_file, weight_file, out_file, map_type='ivm',
         return_stats is True
     """
     # Split kwargs into those for calc_rms and those for select_region_slices
-    calc_rms_kwargs = {k: v for k, v in kwargs.iteritems()
+    calc_rms_kwargs = {k: v for k, v in kwargs.items()
                        if k in getargspec(calc_rms).args}
-    select_region_kwargs = {k: v for k, v in kwargs.iteritems()
+    select_region_kwargs = {k: v for k, v in kwargs.items()
                             if k in getargspec(select_region_slices).args}
 
     # Open drizzled image and weight image
@@ -462,7 +463,7 @@ def create_error_map(sci_file, weight_file, out_file, map_type='ivm',
         weight_to_ivm_scale += autocorr_dict['weight_scale'] / len(calc_slices)
         slice_str = '[{:d}:{:d},{:d}:{:d}]'.format(slice_x.start, slice_x.stop,
                                                    slice_y.start, slice_y.stop)
-        print('Weight scale from region {}: {:.5f}'.format(
+        print('Weight scale from region {}: {:.5g}'.format(
             slice_str, autocorr_dict['weight_scale']))
 
     # Bad pixels are those with 0 or negative weight.
